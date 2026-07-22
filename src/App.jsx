@@ -23,6 +23,12 @@ const TRACKS = {
   health:   { label: "Health",   color: "#34d8a3", Icon: HeartPulse },
 };
 
+const STATUSES = {
+  scheduled: { label: "Scheduled", color: "#7c7d99" },
+  delayed:   { label: "Delayed",   color: "#f5a524" },
+  ended:     { label: "Event ended", color: "#6d6e88" },
+};
+
 const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 
 async function fileToCompressedDataUrl(file, maxW = 900, quality = 0.7) {
@@ -108,6 +114,7 @@ const SEED_EVENTS = [
     date: "2026-08-14",
     time: "16:00",
     location: "Lab 3",
+    status: "scheduled",
     createdAt: Date.now(),
     fields: [
       { id: uid(), type: "text", label: "Full name", required: true },
@@ -296,8 +303,8 @@ function PublicSite() {
 
   const sorted = [...events].sort((a, b) => (a.date || "").localeCompare(b.date || ""));
   const today = new Date().toISOString().slice(0, 10);
-  const upcoming = sorted.filter((e) => !e.date || e.date >= today);
-  const past = sorted.filter((e) => e.date && e.date < today);
+  const upcoming = sorted.filter((e) => e.status !== "ended" && (!e.date || e.date >= today));
+  const past = sorted.filter((e) => e.status === "ended" || (e.date && e.date < today));
 
   return (
     <div className="page">
@@ -355,6 +362,11 @@ function PublicSite() {
               >
                 <div className="event-track" style={{ color: track.color }}>
                   <track.Icon size={13} /> {track.label}
+                  {ev.status && ev.status !== "scheduled" && (
+                    <span className="status-pill" style={{ "--pill": STATUSES[ev.status]?.color }}>
+                      {STATUSES[ev.status]?.label}
+                    </span>
+                  )}
                 </div>
                 <h3 className="event-title">{ev.title}</h3>
                 <p className="event-desc">{ev.description}</p>
@@ -381,6 +393,9 @@ function PublicSite() {
                   <article className="event-card past" key={ev.id} style={{ "--accent": track.color }}>
                     <div className="event-track" style={{ color: track.color }}>
                       <track.Icon size={13} /> {track.label}
+                      <span className="status-pill" style={{ "--pill": STATUSES.ended.color }}>
+                        {ev.status === "delayed" ? STATUSES.delayed.label : STATUSES.ended.label}
+                      </span>
                     </div>
                     <h3 className="event-title">{ev.title}</h3>
                     <div className="meta-row small">
@@ -532,7 +547,7 @@ function EventEditor({ initial, onSave, onCancel }) {
   const [ev, setEv] = useState(
     initial || {
       id: uid(), track: "science", title: "", description: "",
-      date: "", time: "", location: "", fields: [], createdAt: Date.now(),
+      date: "", time: "", location: "", status: "scheduled", fields: [], createdAt: Date.now(),
     }
   );
 
@@ -745,6 +760,13 @@ function AdminDashboard() {
     if (ok) setEvents(next); else fail("Couldn't delete — check your internet connection and Firebase setup.");
   };
 
+  const setEventStatus = async (id, status) => {
+    setSaveError("");
+    const next = events.map((e) => (e.id === id ? { ...e, status } : e));
+    const ok = await storeSet("events", next);
+    if (ok) setEvents(next); else fail("Couldn't update status — check your internet connection and Firebase setup.");
+  };
+
   const approveMemory = async (item) => {
     setSaveError("");
     const next = [...memories];
@@ -773,6 +795,15 @@ function AdminDashboard() {
     const ok = await storeSet("memories", next);
     if (ok) { setMemories(next); setUploadingFor(null); }
     else fail("Couldn't upload — check your internet connection and Firebase setup.");
+  };
+
+  const deleteMemoryImage = async (groupId, imageIndex) => {
+    setSaveError("");
+    const next = memories
+      .map((m) => (m.id === groupId ? { ...m, images: m.images.filter((_, i) => i !== imageIndex) } : m))
+      .filter((m) => (m.images || []).length > 0);
+    const ok = await storeSet("memories", next);
+    if (ok) setMemories(next); else fail("Couldn't delete — check your internet connection and Firebase setup.");
   };
 
   return (
@@ -833,6 +864,18 @@ function AdminDashboard() {
                         <div className="event-track" style={{ color: track.color }}><track.Icon size={13} /> {track.label}</div>
                         <div className="admin-event-title">{ev.title}</div>
                         <div className="meta-row small"><span><Calendar size={13} /> {ev.date || "TBA"}</span><span><Clock size={13} /> {ev.time || "TBA"}</span></div>
+                        <div className="status-toggle-row">
+                          {Object.entries(STATUSES).map(([key, s]) => (
+                            <button
+                              key={key}
+                              className={"status-toggle" + ((ev.status || "scheduled") === key ? " status-toggle-active" : "")}
+                              style={(ev.status || "scheduled") === key ? { borderColor: s.color, color: s.color } : {}}
+                              onClick={() => setEventStatus(ev.id, key)}
+                            >
+                              {s.label}
+                            </button>
+                          ))}
+                        </div>
                       </div>
                       <div className="admin-event-actions">
                         <button className="icon-btn" onClick={() => setViewingResponses(ev)} title="View responses"><ImageIcon size={15} /></button>
@@ -886,6 +929,27 @@ function AdminDashboard() {
                 </label>
               </div>
             ))}
+          </div>
+
+          <div className="form-divider" />
+          <h3 className="editor-subtitle">Published memories — admin can delete</h3>
+          {memories.length === 0 && <p className="empty-note">Nothing published yet.</p>}
+          <div className="pending-grid">
+            {memories.flatMap((m) =>
+              (m.images || []).map((img, i) => (
+                <div className="pending-card published-card" key={m.id + i}>
+                  <img src={img} alt="" />
+                  <div className="pending-meta">
+                    <div className="pending-event">{m.eventTitle}</div>
+                  </div>
+                  <div className="pending-actions">
+                    <button className="icon-btn danger" onClick={() => deleteMemoryImage(m.id, i)} title="Delete this photo">
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
           </div>
         </section>
       )}
@@ -1082,6 +1146,23 @@ body { margin: 0; }
 .admin-event-row { display: flex; justify-content: space-between; align-items: center; background: var(--panel); border-left: 3px solid var(--accent, var(--violet)); border-radius: 10px; padding: 14px 16px; gap: 12px; flex-wrap: wrap; }
 .admin-event-title { font-weight: 600; font-size: 14px; margin: 4px 0; }
 .admin-event-actions { display: flex; gap: 6px; }
+.status-pill {
+  margin-left: 8px; font-size: 10px; font-weight: 700; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--pill); border: 1px solid var(--pill);
+  background: color-mix(in srgb, var(--pill) 14%, transparent);
+  padding: 3px 9px; border-radius: 999px; box-shadow: 0 0 10px color-mix(in srgb, var(--pill) 45%, transparent);
+}
+.status-toggle-row { display: flex; gap: 6px; margin-top: 10px; }
+.status-toggle {
+  background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.14);
+  color: var(--mist); font-size: 11px; font-weight: 600; padding: 5px 11px;
+  border-radius: 999px; cursor: pointer; transition: all .15s ease;
+}
+.status-toggle:hover { border-color: rgba(255,255,255,0.3); }
+.status-toggle-active { background: color-mix(in srgb, currentColor 12%, rgba(255,255,255,0.03)); box-shadow: 0 0 12px color-mix(in srgb, currentColor 40%, transparent); }
+.published-card { position: relative; }
+.published-card .pending-actions { position: absolute; top: 8px; right: 8px; padding: 0; }
+.published-card .icon-btn { background: rgba(6,6,12,0.65); backdrop-filter: blur(4px); }
 .responses-list { display: flex; flex-direction: column; gap: 12px; }
 .response-card { background: var(--panel); border-radius: 10px; padding: 14px; border: 1px solid rgba(255,255,255,0.06); }
 .response-date { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--mist); margin-bottom: 8px; }
